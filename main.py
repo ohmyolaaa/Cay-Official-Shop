@@ -440,18 +440,52 @@ async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
         except ValueError:
             await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
             return
-        cat_id = ud.pop("new_prod_cat_id", None)
-        name = ud.pop("new_prod_name", None)
-        desc = ud.pop("new_prod_desc", None)
-        price = ud.pop("new_prod_price", None)
+        ud["new_prod_stock"] = stock
+        ud["awaiting"] = "prod_duration"
+        await db.set_session(user_id, ud)
+        await update.message.reply_text(
+            "Enter the <b>duration</b> (e.g. <code>540 days</code>, <code>1 Year</code>). Send <code>-</code> to skip:",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+    elif awaiting == "prod_duration":
+        ud["new_prod_duration"] = "" if text.strip() == "-" else text.strip()
+        ud["awaiting"] = "prod_warranty"
+        await db.set_session(user_id, ud)
+        await update.message.reply_text(
+            "Enter the <b>warranty</b> (e.g. <code>No warranty</code>, <code>30 days</code>):",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+    elif awaiting == "prod_warranty":
+        ud["new_prod_warranty"] = text.strip()
+        ud["awaiting"] = "prod_delivery"
+        await db.set_session(user_id, ud)
+        await update.message.reply_text(
+            "Enter the <b>delivery type</b> (e.g. <code>LINK</code>, <code>ACCOUNT</code>, <code>FILE</code>):",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+    elif awaiting == "prod_delivery":
+        cat_id   = ud.pop("new_prod_cat_id", None)
+        name     = ud.pop("new_prod_name", None)
+        desc     = ud.pop("new_prod_desc", None)
+        price    = ud.pop("new_prod_price", None)
+        stock    = ud.pop("new_prod_stock", None)
+        duration = ud.pop("new_prod_duration", "")
+        warranty = ud.pop("new_prod_warranty", "No warranty")
+        delivery = text.strip()
         ud.pop("awaiting", None)
         await db.set_session(user_id, ud)
-        await db.add_product(cat_id, name, desc, price, stock)
+        await db.add_product(cat_id, name, desc, price, stock, duration, warranty, delivery)
         cat = await db.get_category(cat_id)
         cat_name = f"{cat['emoji']} {cat['name']}" if cat else "category"
         await update.message.reply_text(
             f"✅ Product <b>{name}</b> added to <b>{cat_name}</b>!\n"
-            f"💵 ${price:.2f} | 📦 {stock}x in stock",
+            f"💲 ${price:.2f} | 📦 {stock}x in stock | 📬 {delivery}",
             parse_mode="HTML",
             reply_markup=MAIN_MENU,
         )
@@ -473,7 +507,6 @@ async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
             parse_mode="HTML",
             reply_markup=MAIN_MENU,
         )
-
 
 # ─── MAIN CALLBACK HANDLER ───────────────────────────────────────────────────
 # FIX: Do NOT call query.answer() at the top. Each branch answers the query
@@ -620,38 +653,109 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.edit_text("Choose a service:", reply_markup=kb)
         return
 
+    NUM_EMOJIS = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
     if data.startswith("cat_"):
         cat_id = int(data.split("_")[1])
         cat = await db.get_category(cat_id)
         products = await db.get_products(cat_id)
+        cat_emoji = cat["emoji"] if cat else "📦"
+        cat_name = cat["name"] if cat else "Category"
         if not products:
-            cat_label = f"{cat['emoji']} {cat['name']}" if cat else "This category"
             await query.answer()
             await query.message.edit_text(
-                f"{cat_label}\n\n🚫 No products available in this category yet.",
+                f"{cat_emoji} <b>{cat_name}</b>\n\n🚫 No products available in this category yet.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⬅️ Back", callback_data="back_to_products")]
                 ]),
             )
             return
-        lines = [f"{cat['emoji']} <b>{cat['name']}</b>\n"]
-        for p in products:
-            stock_icon = "✅" if p["stock"] > 0 else "❌"
-            stock_text = f"Available • {p['stock']}x" if p["stock"] > 0 else "Out of Stock"
+        lines = [
+            f"{cat_emoji} <b>{cat_name}</b>",
+            "─" * 22,
+            "📦 <b>Available Products:</b>",
+            "Tap on any product for more details\n",
+        ]
+        product_buttons = []
+        for i, p in enumerate(products):
+            num = NUM_EMOJIS[i] if i < len(NUM_EMOJIS) else f"{i + 1}."
+            warranty = p.get("warranty") or "No warranty"
+            duration = p.get("duration") or ""
+            duration_line = f"⚡ {duration}\n" if duration else ""
             lines.append(
-                f"<b>#{p['id']} {p['name']}</b>\n"
-                f"💵 ${p['price']:.2f}  {stock_icon} {stock_text}\n"
-                f"{p['description']}\n"
+                f"{num} {cat_emoji} <b>{p['name']}</b>\n"
+                f"{duration_line}"
+                f"🔺 {warranty}\n"
             )
+            product_buttons.append([
+                InlineKeyboardButton(f"💠 {p['name']}", callback_data=f"user_prod_{p['id']}")
+            ])
+        product_buttons.append([InlineKeyboardButton("⬅️ Services", callback_data="back_to_products")])
         await query.answer()
         await query.message.edit_text(
             "\n".join(lines),
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(product_buttons),
+        )
+        return
+
+    # ── User product detail ──
+    if data.startswith("user_prod_"):
+        prod_id = int(data.split("_")[2])
+        prod = await db.get_product(prod_id)
+        if not prod:
+            await query.answer("Product not found.", show_alert=True)
+            return
+        price    = prod["price"]
+        duration = prod.get("duration") or "—"
+        warranty = prod.get("warranty") or "No warranty"
+        delivery = prod.get("delivery") or "LINK"
+        desc     = prod.get("description") or ""
+        text = (
+            f"📦 <b>{prod['name']}</b>\n\n"
+            f"💲 {price:.2f} USD\n"
+            f"⏳ Duration: {duration}\n"
+            f"🛡 Warranty: {warranty}\n"
+            f"📬 Delivery: {delivery}\n"
+        )
+        if desc:
+            text += f"\n✏️ {desc}\n"
+        await query.answer()
+        await query.message.edit_text(
+            text,
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_products")]
+                [InlineKeyboardButton("🛒 Buy", callback_data=f"buy_{prod_id}")],
+                [InlineKeyboardButton("⬅️ Back to plans", callback_data=f"cat_{prod['category_id']}")],
             ]),
         )
+        return
+
+    # ── Buy flow ──
+    if data.startswith("buy_"):
+        prod_id = int(data.split("_")[1])
+        prod = await db.get_product(prod_id)
+        if not prod:
+            await query.answer("Product not found.", show_alert=True)
+            return
+        db_user = await db.get_user(user_id)
+        balance = float(db_user.get("balance", 0)) if db_user else 0.0
+        price = prod["price"]
+        if balance < price:
+            await query.answer()
+            await query.message.edit_text(
+                f"❌ <b>Insufficient balance.</b>\n\n"
+                f"Required: {price:.2f} USD\n"
+                f"Your balance: {balance:.2f} USD",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data=f"user_prod_{prod_id}")],
+                ]),
+            )
+            return
+        # TODO: deduct balance and deliver product
+        await query.answer("✅ Purchase processing — coming soon!", show_alert=True)
         return
 
     # ── ADMIN PANEL ──────────────────────────────────────────────────────────

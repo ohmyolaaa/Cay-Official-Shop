@@ -66,7 +66,16 @@ async def get_product(prod_id: int) -> dict | None:
     return res.data[0] if res.data else None
 
 
-async def add_product(cat_id: int, name: str, description: str, price: float, stock: int) -> int:
+async def add_product(
+    cat_id: int,
+    name: str,
+    description: str,
+    price: float,
+    stock: int,
+    duration: str = "",
+    warranty: str = "No warranty",
+    delivery: str = "LINK",
+) -> int:
     c = _client()
     res = c.table(PRODUCTS_TABLE).insert({
         "category_id": cat_id,
@@ -74,6 +83,9 @@ async def add_product(cat_id: int, name: str, description: str, price: float, st
         "description": description,
         "price": price,
         "stock": stock,
+        "duration": duration,
+        "warranty": warranty,
+        "delivery": delivery,
     }).execute()
     return res.data[0]["id"]
 
@@ -100,8 +112,11 @@ async def get_all_products_availability() -> str:
         lines.append(f"\n{cat['emoji']} <b>{cat['name']}</b>")
         for p in products:
             stock_icon = "✅" if p["stock"] > 0 else "❌"
-            stock_text = f"{p['stock']}x" if p["stock"] > 0 else "Out of Stock"
-            lines.append(f"  • <b>{p['name']}</b> — ${p['price']:.2f} {stock_icon} {stock_text}")
+            stock_text = f"Available • {p['stock']}x" if p["stock"] > 0 else "Out of Stock"
+            lines.append(
+                f"<blockquote><b>#{p['id']} {cat['emoji']} {p['name']}</b>\n"
+                f"{stock_icon} {stock_text}</blockquote>"
+            )
     if len(lines) == 1:
         lines.append("\nNo products added yet.")
     return "\n".join(lines)
@@ -132,14 +147,6 @@ async def get_user(user_id: int) -> dict | None:
 
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
-# Stored in Supabase so all bot instances share the same state, preventing
-# 409-Conflict race conditions from wiping in-memory awaiting state.
-#
-# Required table (run once in Supabase SQL editor):
-#   CREATE TABLE IF NOT EXISTS cay_shop_states (
-#       user_id BIGINT PRIMARY KEY,
-#       state   JSONB NOT NULL DEFAULT '{}'
-#   );
 
 async def get_session(user_id: int) -> dict:
     c = _client()
