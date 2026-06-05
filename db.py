@@ -7,6 +7,7 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 CATEGORIES_TABLE = "cay_shop_categories"
 PRODUCTS_TABLE = "cay_shop_products"
 USERS_TABLE = "cay_shop_users"
+STATES_TABLE = "cay_shop_states"
 
 
 def _client() -> Client:
@@ -128,3 +129,32 @@ async def get_user(user_id: int) -> dict | None:
     c = _client()
     res = c.table(USERS_TABLE).select("*").eq("user_id", user_id).limit(1).execute()
     return res.data[0] if res.data else None
+
+
+# ─── SESSION STATE ────────────────────────────────────────────────────────────
+# Stored in Supabase so all bot instances share the same state, preventing
+# 409-Conflict race conditions from wiping in-memory awaiting state.
+#
+# Required table (run once in Supabase SQL editor):
+#   CREATE TABLE IF NOT EXISTS cay_shop_states (
+#       user_id BIGINT PRIMARY KEY,
+#       state   JSONB NOT NULL DEFAULT '{}'
+#   );
+
+async def get_session(user_id: int) -> dict:
+    c = _client()
+    res = c.table(STATES_TABLE).select("state").eq("user_id", user_id).limit(1).execute()
+    if res.data:
+        data = res.data[0].get("state")
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+async def set_session(user_id: int, state: dict) -> None:
+    c = _client()
+    c.table(STATES_TABLE).upsert({"user_id": user_id, "state": state}).execute()
+
+
+async def clear_session(user_id: int) -> None:
+    c = _client()
+    c.table(STATES_TABLE).delete().eq("user_id", user_id).execute()

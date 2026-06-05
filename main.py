@@ -289,9 +289,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = update.message.text
     user_id = update.effective_user.id
 
-    if is_admin(user_id) and context.user_data.get("awaiting") and text not in MENU_BUTTONS:
-        await _process_admin_input(update, context)
-        return
+    if is_admin(user_id) and text not in MENU_BUTTONS:
+        ud = await db.get_session(user_id)
+        if ud.get("awaiting"):
+            await _process_admin_input(update, user_id, ud)
+            return
 
     if text == "🛒 Products":
         kb = await build_products_keyboard()
@@ -355,13 +357,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ─── ADMIN TEXT INPUT LOGIC ──────────────────────────────────────────────────
 
-async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    awaiting = context.user_data.get("awaiting")
+async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
+    """
+    Process admin text input. `ud` is the session dict loaded from Supabase.
+    Each branch must call db.set_session / db.clear_session after mutating `ud`.
+    """
+    awaiting = ud.get("awaiting")
     text = update.message.text.strip() if update.message.text else ""
 
     if awaiting == "cat_name":
-        context.user_data["new_cat_name"] = text
-        context.user_data["awaiting"] = "cat_emoji"
+        ud["new_cat_name"] = text
+        ud["awaiting"] = "cat_emoji"
+        await db.set_session(user_id, ud)
         await update.message.reply_text(
             f"📂 Category name set to: <b>{text}</b>\n\nNow pick an emoji for it:",
             parse_mode="HTML",
@@ -369,8 +376,9 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     elif awaiting == "edit_cat_name":
-        cat_id = context.user_data.pop("edit_cat_id", None)
-        context.user_data.pop("awaiting", None)
+        cat_id = ud.pop("edit_cat_id", None)
+        ud.pop("awaiting", None)
+        await db.set_session(user_id, ud)
         if not cat_id:
             await update.message.reply_text("❌ Session expired. Please open the category again.")
             return
@@ -389,8 +397,9 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     elif awaiting == "prod_name":
-        context.user_data["new_prod_name"] = text
-        context.user_data["awaiting"] = "prod_desc"
+        ud["new_prod_name"] = text
+        ud["awaiting"] = "prod_desc"
+        await db.set_session(user_id, ud)
         await update.message.reply_text(
             "Enter a <b>description</b> for this product:",
             parse_mode="HTML",
@@ -398,8 +407,9 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     elif awaiting == "prod_desc":
-        context.user_data["new_prod_desc"] = text
-        context.user_data["awaiting"] = "prod_price"
+        ud["new_prod_desc"] = text
+        ud["awaiting"] = "prod_price"
+        await db.set_session(user_id, ud)
         await update.message.reply_text(
             "Enter the <b>price</b> (e.g. 4.99):",
             parse_mode="HTML",
@@ -415,8 +425,9 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 reply_markup=ReplyKeyboardRemove(),
             )
             return
-        context.user_data["new_prod_price"] = price
-        context.user_data["awaiting"] = "prod_stock"
+        ud["new_prod_price"] = price
+        ud["awaiting"] = "prod_stock"
+        await db.set_session(user_id, ud)
         await update.message.reply_text(
             "Enter the <b>stock quantity</b> (e.g. 10):",
             parse_mode="HTML",
@@ -429,11 +440,12 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
             return
-        cat_id = context.user_data.pop("new_prod_cat_id")
-        name = context.user_data.pop("new_prod_name")
-        desc = context.user_data.pop("new_prod_desc")
-        price = context.user_data.pop("new_prod_price")
-        context.user_data.pop("awaiting", None)
+        cat_id = ud.pop("new_prod_cat_id", None)
+        name = ud.pop("new_prod_name", None)
+        desc = ud.pop("new_prod_desc", None)
+        price = ud.pop("new_prod_price", None)
+        ud.pop("awaiting", None)
+        await db.set_session(user_id, ud)
         await db.add_product(cat_id, name, desc, price, stock)
         cat = await db.get_category(cat_id)
         cat_name = f"{cat['emoji']} {cat['name']}" if cat else "category"
@@ -450,9 +462,10 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
             return
-        prod_id = context.user_data.pop("stock_prod_id")
-        context.user_data.pop("stock_cat_id", None)
-        context.user_data.pop("awaiting", None)
+        prod_id = ud.pop("stock_prod_id", None)
+        ud.pop("stock_cat_id", None)
+        ud.pop("awaiting", None)
+        await db.set_session(user_id, ud)
         prod = await db.get_product(prod_id)
         await db.update_product_stock(prod_id, stock)
         await update.message.reply_text(
@@ -484,7 +497,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Cancel admin flow ──
     if data == "admin_cancel_flow":
-        context.user_data.clear()
+        await db.clear_session(user_id)
         await query.answer("Cancelled.")
         await query.message.delete()
         await query.message.reply_text("❌ Cancelled.", reply_markup=MAIN_MENU)
@@ -503,8 +516,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Invalid emoji selection.", show_alert=True)
             return
 
+        ud = await db.get_session(user_id)
+
         # ── Edit mode: changing emoji on an existing category ──
-        edit_cat_id = context.user_data.get("edit_cat_id")
+        edit_cat_id = ud.get("edit_cat_id")
         if edit_cat_id:
             try:
                 await db.update_category(edit_cat_id, emoji=emoji)
@@ -512,8 +527,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 logger.error(f"Failed to update category emoji: {e}", exc_info=e)
                 await query.answer("❌ Failed to update emoji. Please try again.", show_alert=True)
                 return
-            context.user_data.pop("edit_cat_id", None)
-            context.user_data.pop("awaiting", None)
+            ud.pop("edit_cat_id", None)
+            ud.pop("awaiting", None)
+            await db.set_session(user_id, ud)
             cat = await db.get_category(edit_cat_id)
             label = f"{cat['emoji']} {cat['name']}" if cat else f"{emoji} category"
             kb = await admin_categories_keyboard()
@@ -528,7 +544,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # ── Create mode: picking emoji for a new category ──
         # Use get() first — only pop() after the DB call succeeds so retries
         # still have the name available if something goes wrong.
-        name = context.user_data.get("new_cat_name")
+        name = ud.get("new_cat_name")
 
         if not name:
             await query.answer("Session expired — please start /admin again.", show_alert=True)
@@ -543,8 +559,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         # Success — now clear the state
-        context.user_data.pop("new_cat_name", None)
-        context.user_data.pop("awaiting", None)
+        ud.pop("new_cat_name", None)
+        ud.pop("awaiting", None)
+        await db.set_session(user_id, ud)
 
         kb = await admin_categories_keyboard()
         await query.answer(f"✅ Category '{emoji} {name}' added!")
@@ -705,8 +722,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin_editcat_name_"):
         cat_id = int(data.split("_")[3])
         cat = await db.get_category(cat_id)
-        context.user_data["awaiting"] = "edit_cat_name"
-        context.user_data["edit_cat_id"] = cat_id
+        await db.set_session(user_id, {"awaiting": "edit_cat_name", "edit_cat_id": cat_id})
         await query.answer()
         await query.message.reply_text(
             f"✏️ Enter a new name for <b>{cat['emoji']} {cat['name']}</b>:",
@@ -718,9 +734,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin_editcat_emoji_"):
         cat_id = int(data.split("_")[3])
         cat = await db.get_category(cat_id)
-        context.user_data["edit_cat_id"] = cat_id
-        context.user_data.pop("new_cat_name", None)
-        context.user_data.pop("awaiting", None)
+        await db.set_session(user_id, {"edit_cat_id": cat_id})
         await query.answer()
         await query.message.reply_text(
             f"🎨 Pick a new emoji for <b>{cat['emoji']} {cat['name']}</b>:",
@@ -766,9 +780,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not prod:
             await query.answer("Product not found.", show_alert=True)
             return
-        context.user_data["stock_prod_id"] = prod_id
-        context.user_data["stock_cat_id"] = prod["category_id"]
-        context.user_data["awaiting"] = "stock"
+        await db.set_session(user_id, {
+            "awaiting": "stock",
+            "stock_prod_id": prod_id,
+            "stock_cat_id": prod["category_id"],
+        })
         await query.answer()
         await query.message.reply_text(
             f"✏️ Enter new stock quantity for <b>{prod['name']}</b>:",
@@ -778,7 +794,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "admin_addcat":
-        context.user_data["awaiting"] = "cat_name"
+        await db.set_session(user_id, {"awaiting": "cat_name"})
         await query.answer()
         await query.message.reply_text(
             "📂 Enter the <b>category name</b>:",
@@ -789,8 +805,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("admin_addprod_"):
         cat_id = int(data.split("_")[2])
-        context.user_data["awaiting"] = "prod_name"
-        context.user_data["new_prod_cat_id"] = cat_id
+        await db.set_session(user_id, {"awaiting": "prod_name", "new_prod_cat_id": cat_id})
         await query.answer()
         await query.message.reply_text(
             "📦 Enter the <b>product name</b>:",
