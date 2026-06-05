@@ -41,7 +41,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
         [KeyboardButton("📋 Bot Policy"), KeyboardButton("❓ Help")],
     ],
     resize_keyboard=True,
-    is_persistent=True,
 )
 
 BOT_POLICY = (
@@ -337,6 +336,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ─── ADMIN TEXT INPUT LOGIC ──────────────────────────────────────────────────
 
+async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Catches sticker/animated-emoji messages sent during admin flows that expect an emoji."""
+    if not is_admin(update.effective_user.id):
+        return
+    awaiting = context.user_data.get("awaiting")
+    if awaiting != "cat_emoji":
+        return
+    # Extract the emoji character associated with this sticker
+    emoji = update.message.sticker.emoji if update.message.sticker and update.message.sticker.emoji else "📦"
+    name = context.user_data.pop("new_cat_name")
+    context.user_data.pop("awaiting", None)
+    await db.add_category(name, emoji)
+    await update.message.reply_text(
+        f"✅ Category <b>{emoji} {name}</b> added!\n\nUse /admin to manage products.",
+        parse_mode="HTML",
+        reply_markup=MAIN_MENU,
+    )
+
+
 async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     awaiting = context.user_data.get("awaiting")
     text = update.message.text.strip()
@@ -345,7 +363,11 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
     if awaiting == "cat_name":
         context.user_data["new_cat_name"] = text
         context.user_data["awaiting"] = "cat_emoji"
-        await update.message.reply_text("Now send an <b>emoji</b> for this category (e.g. 🌟):", parse_mode="HTML")
+        await update.message.reply_text(
+            "Now send an <b>emoji</b> for this category (e.g. 🌟):\n\n"
+            "<i>Tip: type the emoji directly as text — don't pick it from the sticker panel.</i>",
+            parse_mode="HTML",
+        )
 
     elif awaiting == "cat_emoji":
         name = context.user_data.pop("new_cat_name")
@@ -649,6 +671,7 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     app.add_error_handler(error_handler)
 
     app.run_polling(
