@@ -79,7 +79,7 @@ CATEGORY_EMOJIS = [
     "🤖", "💻", "📱", "🎮", "🎬", "🎵",
     "📚", "🌐", "🎨", "🔧", "💡", "🎁",
     "🌟", "🔥", "💎", "🚀", "👑", "🏆",
-    "💰", "⚡", "🛒", "🎯", "🛡️", "📦",
+    "💰", "⚡", "🛒", "🎯", "🛡", "📦",
 ]
 
 
@@ -91,11 +91,17 @@ def build_emoji_picker() -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(CATEGORY_EMOJIS), 6):
         rows.append([
-            InlineKeyboardButton(e, callback_data=f"admin_emoji_{e}")
-            for e in CATEGORY_EMOJIS[i:i + 6]
+            InlineKeyboardButton(e, callback_data=f"emoji_{i + j}")
+            for j, e in enumerate(CATEGORY_EMOJIS[i:i + 6])
         ])
     rows.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel_flow")])
     return InlineKeyboardMarkup(rows)
+
+
+def get_emoji_by_index(index: int) -> str:
+    if 0 <= index < len(CATEGORY_EMOJIS):
+        return CATEGORY_EMOJIS[index]
+    return "📦"
 
 
 # ─── USER-FACING KEYBOARDS ───────────────────────────────────────────────────
@@ -223,14 +229,13 @@ async def admin_products_keyboard(cat_id: int):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg_user = update.effective_user
-    first_name = tg_user.first_name if tg_user else "there"
     await db.get_or_create_user(
         user_id=tg_user.id,
         username=tg_user.username,
         full_name=tg_user.full_name,
     )
     await update.message.reply_text(
-        f"👋 Welcome to CayShop Bot!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
+        "👋 Welcome to CayShop Bot!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
         reply_markup=MAIN_MENU,
     )
 
@@ -274,7 +279,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = update.message.text
     user_id = update.effective_user.id
 
-    # Admin input flow — only intercepts when awaiting AND not a menu button
     if is_admin(user_id) and context.user_data.get("awaiting") and text not in MENU_BUTTONS:
         await _process_admin_input(update, context)
         return
@@ -414,41 +418,63 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # ─── MAIN CALLBACK HANDLER ───────────────────────────────────────────────────
+# FIX: Do NOT call query.answer() at the top. Each branch answers the query
+# exactly once. Calling it twice causes a silent Telegram error, resulting in
+# "no response" for the user.
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     data = query.data
     user_id = update.effective_user.id
 
     # ── General ──
     if data == "close":
+        await query.answer()
         await query.message.delete()
         return
 
     if data == "noop":
+        await query.answer()
         return
 
     # ── Cancel admin flow ──
     if data == "admin_cancel_flow":
         context.user_data.clear()
+        await query.answer("Cancelled.")
         await query.message.delete()
         return
 
     # ── Emoji picker (category creation) ──
-    if data.startswith("admin_emoji_"):
+    # Emojis are stored by index to avoid multi-byte callback_data issues.
+    if data.startswith("emoji_"):
         if not is_admin(user_id):
             await query.answer("⛔ Admins only.", show_alert=True)
             return
-        emoji = data[len("admin_emoji_"):]
+        try:
+            index = int(data[len("emoji_"):])
+            emoji = get_emoji_by_index(index)
+        except (ValueError, IndexError):
+            await query.answer("Invalid emoji selection.", show_alert=True)
+            return
+
         name = context.user_data.pop("new_cat_name", None)
         context.user_data.pop("awaiting", None)
+
         if not name:
-            await query.answer("Session expired. Start again.", show_alert=True)
+            # Session expired (e.g. bot was restarted). Give clear feedback.
+            await query.answer("Session expired — please start over.", show_alert=True)
             await query.message.delete()
             return
-        await db.add_category(name, emoji)
+
+        try:
+            await db.add_category(name, emoji)
+        except Exception as e:
+            logger.error(f"Failed to add category: {e}", exc_info=e)
+            await query.answer("❌ Failed to save category. Please try again.", show_alert=True)
+            return
+
         kb = await admin_categories_keyboard()
+        await query.answer(f"✅ Category '{emoji} {name}' added!")
         await query.message.edit_text(
             f"✅ Category <b>{emoji} {name}</b> added!\n\n📂 <b>Categories</b>:",
             parse_mode="HTML",
@@ -458,12 +484,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ── Language ──
     if data == "lang_ar":
+        await query.answer()
         await query.message.edit_text(
             "✅ تم اختيار اللغة العربية\n\nاللغة العربية غير متاحة حالياً، سيتم إضافتها قريباً."
         )
         return
 
     if data == "lang_en":
+        await query.answer()
         await query.message.edit_text(
             "✅ English language selected.\n\nYou are now using the bot in English."
         )
@@ -486,6 +514,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ── Products (user) ──
     if data == "whats_available":
         text = await db.get_all_products_availability()
+        await query.answer()
         await query.message.edit_text(
             text,
             parse_mode="HTML",
@@ -497,6 +526,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "back_to_products":
         kb = await build_products_keyboard()
+        await query.answer()
         await query.message.edit_text("Choose a service:", reply_markup=kb)
         return
 
@@ -516,6 +546,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"💵 ${p['price']:.2f}  {stock_icon} {stock_text}\n"
                 f"{p['description']}\n"
             )
+        await query.answer()
         await query.message.edit_text(
             "\n".join(lines),
             parse_mode="HTML",
@@ -531,6 +562,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "admin_main":
+        await query.answer()
         await query.message.edit_text(
             "🔧 <b>Admin Panel</b>\n\nManage your bot's categories and products below:",
             parse_mode="HTML",
@@ -540,6 +572,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "admin_categories":
         kb = await admin_categories_keyboard()
+        await query.answer()
         await query.message.edit_text(
             "📂 <b>Categories</b>\n\nAdd, view or delete categories:",
             parse_mode="HTML",
@@ -553,6 +586,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("No categories yet. Add a category first.", show_alert=True)
             return
         kb = await admin_products_pick_cat_keyboard()
+        await query.answer()
         await query.message.edit_text(
             "📦 <b>Products</b>\n\nSelect a category to manage its products:",
             parse_mode="HTML",
@@ -563,6 +597,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin_prodcat_"):
         cat_id = int(data.split("_")[2])
         kb, cat_name = await admin_products_keyboard(cat_id)
+        await query.answer()
         await query.message.edit_text(
             f"📦 <b>Products — {cat_name}</b>\n\nManage products below:",
             parse_mode="HTML",
@@ -576,6 +611,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if cat:
             await db.delete_category(cat_id)
         kb = await admin_categories_keyboard()
+        await query.answer("✅ Category deleted.")
         await query.message.edit_text(
             "✅ Category deleted.\n\n📂 <b>Categories</b>:",
             parse_mode="HTML",
@@ -590,19 +626,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             cat_id = prod["category_id"]
             await db.delete_product(prod_id)
             kb, cat_name = await admin_products_keyboard(cat_id)
+            await query.answer("✅ Product deleted.")
             await query.message.edit_text(
                 f"✅ Product deleted.\n\n📦 <b>Products — {cat_name}</b>:",
                 parse_mode="HTML",
                 reply_markup=kb,
             )
+        else:
+            await query.answer("Product not found.", show_alert=True)
         return
 
     if data.startswith("admin_stock_"):
         prod_id = int(data.split("_")[2])
         prod = await db.get_product(prod_id)
+        if not prod:
+            await query.answer("Product not found.", show_alert=True)
+            return
         context.user_data["stock_prod_id"] = prod_id
         context.user_data["stock_cat_id"] = prod["category_id"]
         context.user_data["awaiting"] = "stock"
+        await query.answer()
         await query.message.reply_text(
             f"✏️ Enter new stock quantity for <b>{prod['name']}</b>:",
             parse_mode="HTML",
@@ -611,6 +654,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "admin_addcat":
         context.user_data["awaiting"] = "cat_name"
+        await query.answer()
         await query.message.reply_text("📂 Enter the <b>category name</b>:", parse_mode="HTML")
         return
 
@@ -618,15 +662,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         cat_id = int(data.split("_")[2])
         context.user_data["awaiting"] = "prod_name"
         context.user_data["new_prod_cat_id"] = cat_id
+        await query.answer()
         await query.message.reply_text("📦 Enter the <b>product name</b>:", parse_mode="HTML")
         return
+
+    # Unhandled callback
+    await query.answer()
 
 
 # ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(context.error, Conflict):
-        logger.warning("Conflict error — another bot instance may still be shutting down. Will retry.")
+        logger.warning("Conflict error — another bot instance may still be shutting down.")
     elif isinstance(context.error, NetworkError):
         logger.warning(f"Network error: {context.error}")
     else:
