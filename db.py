@@ -125,7 +125,7 @@ async def get_all_products_availability() -> str:
             )
     if len(lines) == 1:
         lines.append("\nNo products added yet.")
-        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 
