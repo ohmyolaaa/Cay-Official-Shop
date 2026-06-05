@@ -204,7 +204,7 @@ async def admin_products_keyboard(cat_id: int):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     first_name = update.effective_user.first_name if update.effective_user else "there"
     await update.message.reply_text(
-        f"👋 Hello, {first_name}! Welcome!\n\nChoose an option from the menu below:",
+        f"👋 Hello, {first_name}! Welcome to CayShop Bot!!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
         reply_markup=MAIN_MENU,
     )
 
