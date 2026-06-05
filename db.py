@@ -8,6 +8,7 @@ _client: Client | None = None
 
 CATEGORIES_TABLE = "cay_shop_categories"
 PRODUCTS_TABLE = "cay_shop_products"
+USERS_TABLE = "cay_shop_users"
 
 
 def get_client() -> Client:
@@ -17,6 +18,37 @@ def get_client() -> Client:
             raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set.")
         _client = create_client(SUPABASE_URL, SUPABASE_KEY)
     return _client
+
+
+# ─── USERS ───────────────────────────────────────────────────────────────────
+
+async def get_or_create_user(user_id: int, username: str | None, full_name: str) -> dict:
+    c = get_client()
+    r = c.table(USERS_TABLE).select("*").eq("user_id", user_id).limit(1).execute()
+    if r.data:
+        if r.data[0]["full_name"] != full_name or r.data[0]["username"] != username:
+            c.table(USERS_TABLE).update({
+                "full_name": full_name,
+                "username": username,
+            }).eq("user_id", user_id).execute()
+            r.data[0]["full_name"] = full_name
+            r.data[0]["username"] = username
+        return r.data[0]
+    ins = c.table(USERS_TABLE).insert({
+        "user_id": user_id,
+        "username": username,
+        "full_name": full_name,
+        "balance": 0.0,
+        "total_purchases": 0,
+        "total_spent": 0.0,
+    }).execute()
+    return ins.data[0]
+
+
+async def get_user(user_id: int) -> dict | None:
+    c = get_client()
+    r = c.table(USERS_TABLE).select("*").eq("user_id", user_id).limit(1).execute()
+    return r.data[0] if r.data else None
 
 
 # ─── CATEGORIES ──────────────────────────────────────────────────────────────

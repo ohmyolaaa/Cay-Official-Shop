@@ -105,19 +105,30 @@ async def build_products_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_profile_text(user) -> str:
-    reg_date = datetime.now().strftime("%m/%d/%Y, %H:%M")
-    full_name = user.full_name if user else "Unknown"
-    user_id = user.id if user else "N/A"
+def build_profile_text(tg_user, db_user: dict) -> str:
+    full_name = tg_user.full_name if tg_user else "Unknown"
+    user_id = tg_user.id if tg_user else "N/A"
+    balance = db_user.get("balance", 0.0) if db_user else 0.0
+    total_purchases = db_user.get("total_purchases", 0) if db_user else 0
+    total_spent = db_user.get("total_spent", 0.0) if db_user else 0.0
+    joined_at = db_user.get("joined_at") if db_user else None
+    if joined_at:
+        try:
+            dt = datetime.fromisoformat(joined_at.replace("Z", "+00:00"))
+            reg_date = dt.strftime("%m/%d/%Y, %H:%M")
+        except Exception:
+            reg_date = joined_at[:16]
+    else:
+        reg_date = datetime.now().strftime("%m/%d/%Y, %H:%M")
     return (
         f"👤 <b>Profile</b>\n\n"
         f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
         f"👤 <b>Name:</b> {full_name}\n"
-        f"💰 <b>Balance:</b> $0.00\n"
+        f"💰 <b>Balance:</b> ${balance:.2f}\n"
         f"⭐ <b>Level:</b> Newbie (1)\n"
         f"🏷️ <b>Product discount:</b> 0%\n"
-        f"🛒 <b>Total purchases:</b> 0\n"
-        f"💸 <b>Spent (net):</b> $0.00\n"
+        f"🛒 <b>Total purchases:</b> {total_purchases}\n"
+        f"💸 <b>Spent (net):</b> ${total_spent:.2f}\n"
         f"🤝 <b>Reseller discount:</b> ❌\n"
         f"📅 <b>Registration date:</b> {reg_date}"
     )
@@ -202,9 +213,15 @@ async def admin_products_keyboard(cat_id: int):
 # ─── USER COMMAND HANDLERS ───────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    first_name = update.effective_user.first_name if update.effective_user else "there"
+    tg_user = update.effective_user
+    first_name = tg_user.first_name if tg_user else "there"
+    await db.get_or_create_user(
+        user_id=tg_user.id,
+        username=tg_user.username,
+        full_name=tg_user.full_name,
+    )
     await update.message.reply_text(
-        f"👋 Hello, {first_name}! Welcome to CayShop Bot!!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
+        f"👋 Welcome to CayShop Bot!!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
         reply_markup=MAIN_MENU,
     )
 
@@ -263,8 +280,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Choose a service:", reply_markup=kb)
 
     elif text == "👤 Profile":
+        db_user = await db.get_user(update.effective_user.id)
         await update.message.reply_text(
-            build_profile_text(update.effective_user),
+            build_profile_text(update.effective_user, db_user),
             parse_mode="HTML",
             reply_markup=PROFILE_KEYBOARD,
         )
