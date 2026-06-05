@@ -470,6 +470,16 @@ async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
         )
 
     elif awaiting == "prod_delivery":
+        ud["new_prod_delivery"] = text.strip()
+        ud["awaiting"] = "prod_demo_url"
+        await db.set_session(user_id, ud)
+        await update.message.reply_text(
+            "Enter a <b>demo URL</b> for users to try the product (e.g. <code>https://t.me/yourbot?start=demo</code>).\n\nSend <code>-</code> to skip:",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+    elif awaiting == "prod_demo_url":
         cat_id   = ud.pop("new_prod_cat_id", None)
         name     = ud.pop("new_prod_name", None)
         desc     = ud.pop("new_prod_desc", None)
@@ -477,10 +487,11 @@ async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
         stock    = ud.pop("new_prod_stock", None)
         duration = ud.pop("new_prod_duration", "")
         warranty = ud.pop("new_prod_warranty", "No warranty")
-        delivery = text.strip()
+        delivery = ud.pop("new_prod_delivery", "LINK")
+        demo_url = "" if text.strip() == "-" else text.strip()
         ud.pop("awaiting", None)
         await db.set_session(user_id, ud)
-        await db.add_product(cat_id, name, desc, price, stock, duration, warranty, delivery)
+        await db.add_product(cat_id, name, desc, price, stock, duration, warranty, delivery, demo_url)
         cat = await db.get_category(cat_id)
         cat_name = f"{cat['emoji']} {cat['name']}" if cat else "category"
         await update.message.reply_text(
@@ -708,12 +719,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if desc:
             text += f"\n{desc}\n"
         await query.answer()
+        # Build the button row — Demo beside Buy only when a URL exists
+        demo_url = (prod.get("demo_url") or "").strip()
+        action_row = []
+        if demo_url:
+            action_row.append(InlineKeyboardButton("🎮 Demo", url=demo_url))
+        action_row.append(InlineKeyboardButton(f"🚀 Buy", callback_data=f"buy_{prod_id}"))
+
         await query.message.edit_text(
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"{cat_emoji} Buy", callback_data=f"buy_{prod_id}")],
-                [InlineKeyboardButton("Back to plans", callback_data=f"cat_{prod['category_id']}")],
+                action_row,
+                [InlineKeyboardButton("⬅️ Back to plans", callback_data=f"cat_{prod['category_id']}")],
             ]),
         )
         return

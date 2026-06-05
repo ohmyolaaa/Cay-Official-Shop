@@ -75,6 +75,7 @@ async def add_product(
     duration: str = "",
     warranty: str = "No warranty",
     delivery: str = "LINK",
+    demo_url: str = "",          # ← add this
 ) -> int:
     c = _client()
     res = c.table(PRODUCTS_TABLE).insert({
@@ -86,6 +87,7 @@ async def add_product(
         "duration": duration,
         "warranty": warranty,
         "delivery": delivery,
+        "demo_url": demo_url,    # ← add this
     }).execute()
     return res.data[0]["id"]
 
