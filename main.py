@@ -457,12 +457,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Invalid emoji selection.", show_alert=True)
             return
 
-        name = context.user_data.pop("new_cat_name", None)
-        context.user_data.pop("awaiting", None)
+        # Use get() first — only pop() after the DB call succeeds so retries
+        # still have the name available if something goes wrong.
+        name = context.user_data.get("new_cat_name")
 
         if not name:
             # Session expired (e.g. bot was restarted). Give clear feedback.
-            await query.answer("Session expired — please start over.", show_alert=True)
+            await query.answer("Session expired — please start /admin again.", show_alert=True)
             await query.message.delete()
             return
 
@@ -472,6 +473,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Failed to add category: {e}", exc_info=e)
             await query.answer("❌ Failed to save category. Please try again.", show_alert=True)
             return
+
+        # Success — now clear the state
+        context.user_data.pop("new_cat_name", None)
+        context.user_data.pop("awaiting", None)
 
         kb = await admin_categories_keyboard()
         await query.answer(f"✅ Category '{emoji} {name}' added!")
