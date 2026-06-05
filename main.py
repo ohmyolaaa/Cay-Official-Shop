@@ -598,7 +598,19 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def post_init(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info(f"Bot started — admins: {ADMIN_IDS}")
+    # Wait for any competing instance to fully release its polling hold.
+    # Telegram gives a 409 Conflict until the old session times out (~30–60s).
+    for attempt in range(20):
+        try:
+            await application.bot.get_updates(offset=-1, timeout=1)
+            break  # Got a clean response — we own the session now
+        except Conflict:
+            wait = min(3 * (attempt + 1), 15)
+            logger.warning(f"409 Conflict on startup — another instance is still running. Waiting {wait}s… (attempt {attempt + 1}/20)")
+            await asyncio.sleep(wait)
+        except Exception:
+            break
+    logger.info(f"Bot ready — admins: {ADMIN_IDS}")
 
 
 def main() -> None:
