@@ -797,7 +797,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         action_row = []
         if demo_url:
             action_row.append(InlineKeyboardButton("🎮 Demo", url=demo_url))
-        action_row.append(InlineKeyboardButton(f"🚀 Buy", callback_data=f"buy_{prod_id}"))
+        if prod["stock"] > 0:
+            action_row.append(InlineKeyboardButton("🚀 Buy", callback_data=f"buy_{prod_id}"))
+        else:
+            action_row.append(InlineKeyboardButton("❌ Out of Stock", callback_data="noop"))
 
         await query.message.edit_text(
             text,
@@ -815,6 +818,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         prod = await db.get_product(prod_id)
         if not prod:
             await query.answer("Product not found.", show_alert=True)
+            return
+        if prod["stock"] <= 0:
+            await query.answer("❌ This product is out of stock.", show_alert=True)
             return
         db_user = await db.get_user(user_id)
         balance = float(db_user.get("balance", 0)) if db_user else 0.0
