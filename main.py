@@ -8,7 +8,6 @@ from telegram import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    Bot,
 )
 from telegram.ext import (
     Application,
@@ -72,18 +71,31 @@ HELP_TEXT = (
 )
 
 MENU_BUTTONS = {
-    "🛒 Products",
-    "👤 Profile",
-    "🎁 Invite Center",
-    "💰 Top up balance",
-    "🎫 Redeem Code",
-    "📋 Bot Policy",
-    "❓ Help",
+    "🛒 Products", "👤 Profile", "🎁 Invite Center",
+    "💰 Top up balance", "🎫 Redeem Code", "📋 Bot Policy", "❓ Help",
 }
+
+CATEGORY_EMOJIS = [
+    "🤖", "💻", "📱", "🎮", "🎬", "🎵",
+    "📚", "🌐", "🎨", "🔧", "💡", "🎁",
+    "🌟", "🔥", "💎", "🚀", "👑", "🏆",
+    "💰", "⚡", "🛒", "🎯", "🛡️", "📦",
+]
 
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def build_emoji_picker() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(CATEGORY_EMOJIS), 6):
+        rows.append([
+            InlineKeyboardButton(e, callback_data=f"admin_emoji_{e}")
+            for e in CATEGORY_EMOJIS[i:i + 6]
+        ])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel_flow")])
+    return InlineKeyboardMarkup(rows)
 
 
 # ─── USER-FACING KEYBOARDS ───────────────────────────────────────────────────
@@ -98,7 +110,7 @@ async def build_products_keyboard() -> InlineKeyboardMarkup:
             callback_data=f"cat_{cat['id']}"
         ))
     for i in range(0, len(pairs), 2):
-        rows.append(pairs[i:i+2])
+        rows.append(pairs[i:i + 2])
     rows.append([InlineKeyboardButton("🟢 What's Available", callback_data="whats_available")])
     rows.append([InlineKeyboardButton("✕ Close", callback_data="close")])
     return InlineKeyboardMarkup(rows)
@@ -131,6 +143,7 @@ def build_profile_text(tg_user, db_user: dict) -> str:
         f"🤝 <b>Reseller discount:</b> ❌\n"
         f"📅 <b>Registration date:</b> {reg_date}"
     )
+
 
 PROFILE_KEYBOARD = InlineKeyboardMarkup([
     [
@@ -200,10 +213,7 @@ async def admin_products_keyboard(cat_id: int):
             InlineKeyboardButton("✏️ Stock", callback_data=f"admin_stock_{p['id']}"),
             InlineKeyboardButton("🗑 Delete", callback_data=f"admin_delprod_{p['id']}"),
         ])
-    rows.append([InlineKeyboardButton(
-        "➕ Add Product",
-        callback_data=f"admin_addprod_{cat_id}"
-    )])
+    rows.append([InlineKeyboardButton("➕ Add Product", callback_data=f"admin_addprod_{cat_id}")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_products")])
     cat_name = f"{cat['emoji']} {cat['name']}" if cat else "Category"
     return InlineKeyboardMarkup(rows), cat_name
@@ -220,7 +230,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         full_name=tg_user.full_name,
     )
     await update.message.reply_text(
-        f"👋 Welcome to CayShop Bot!!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
+        f"👋 Welcome to CayShop Bot!\n\nI'm here to help you purchase subscriptions and digital services easily and securely.",
         reply_markup=MAIN_MENU,
     )
 
@@ -259,21 +269,16 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # ─── COMBINED MESSAGE HANDLER ─────────────────────────────────────────────────
-# Single handler for ALL text messages. For admins with an active flow,
-# it processes the admin input first; otherwise it handles menu buttons.
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
     user_id = update.effective_user.id
 
-    # ── Admin input flow (only when awaiting a response) ──
-    if is_admin(user_id) and context.user_data.get("awaiting"):
-        # Only intercept if the text is NOT a menu button press
-        if text not in MENU_BUTTONS:
-            await _process_admin_input(update, context)
-            return
+    # Admin input flow — only intercepts when awaiting AND not a menu button
+    if is_admin(user_id) and context.user_data.get("awaiting") and text not in MENU_BUTTONS:
+        await _process_admin_input(update, context)
+        return
 
-    # ── Menu buttons ──
     if text == "🛒 Products":
         kb = await build_products_keyboard()
         await update.message.reply_text("Choose a service:", reply_markup=kb)
@@ -336,51 +341,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ─── ADMIN TEXT INPUT LOGIC ──────────────────────────────────────────────────
 
-async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Catches sticker/animated-emoji messages sent during admin flows that expect an emoji."""
-    if not is_admin(update.effective_user.id):
-        return
-    awaiting = context.user_data.get("awaiting")
-    if awaiting != "cat_emoji":
-        return
-    # Extract the emoji character associated with this sticker
-    emoji = update.message.sticker.emoji if update.message.sticker and update.message.sticker.emoji else "📦"
-    name = context.user_data.pop("new_cat_name")
-    context.user_data.pop("awaiting", None)
-    await db.add_category(name, emoji)
-    await update.message.reply_text(
-        f"✅ Category <b>{emoji} {name}</b> added!\n\nUse /admin to manage products.",
-        parse_mode="HTML",
-        reply_markup=MAIN_MENU,
-    )
-
-
 async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     awaiting = context.user_data.get("awaiting")
-    text = update.message.text.strip()
+    text = update.message.text.strip() if update.message.text else ""
 
-    # ── Category flow ──
     if awaiting == "cat_name":
         context.user_data["new_cat_name"] = text
         context.user_data["awaiting"] = "cat_emoji"
         await update.message.reply_text(
-            "Now send an <b>emoji</b> for this category (e.g. 🌟):\n\n"
-            "<i>Tip: type the emoji directly as text — don't pick it from the sticker panel.</i>",
+            f"📂 Category name set to: <b>{text}</b>\n\nNow pick an emoji for it:",
             parse_mode="HTML",
+            reply_markup=build_emoji_picker(),
         )
 
-    elif awaiting == "cat_emoji":
-        name = context.user_data.pop("new_cat_name")
-        emoji = text
-        context.user_data.pop("awaiting", None)
-        await db.add_category(name, emoji)
-        await update.message.reply_text(
-            f"✅ Category <b>{emoji} {name}</b> added!\n\nUse /admin to manage products.",
-            parse_mode="HTML",
-            reply_markup=MAIN_MENU,
-        )
-
-    # ── Product flow ──
     elif awaiting == "prod_name":
         context.user_data["new_prod_name"] = text
         context.user_data["awaiting"] = "prod_desc"
@@ -422,7 +395,6 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=MAIN_MENU,
         )
 
-    # ── Stock update flow ──
     elif awaiting == "stock":
         try:
             stock = int(text)
@@ -455,6 +427,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "noop":
+        return
+
+    # ── Cancel admin flow ──
+    if data == "admin_cancel_flow":
+        context.user_data.clear()
+        await query.message.delete()
+        return
+
+    # ── Emoji picker (category creation) ──
+    if data.startswith("admin_emoji_"):
+        if not is_admin(user_id):
+            await query.answer("⛔ Admins only.", show_alert=True)
+            return
+        emoji = data[len("admin_emoji_"):]
+        name = context.user_data.pop("new_cat_name", None)
+        context.user_data.pop("awaiting", None)
+        if not name:
+            await query.answer("Session expired. Start again.", show_alert=True)
+            await query.message.delete()
+            return
+        await db.add_category(name, emoji)
+        kb = await admin_categories_keyboard()
+        await query.message.edit_text(
+            f"✅ Category <b>{emoji} {name}</b> added!\n\n📂 <b>Categories</b>:",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
         return
 
     # ── Language ──
@@ -638,15 +637,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def post_init(application: Application) -> None:
     await application.bot.delete_webhook(drop_pending_updates=True)
-    # Wait for any competing instance to fully release its polling hold.
-    # Telegram gives a 409 Conflict until the old session times out (~30–60s).
     for attempt in range(20):
         try:
             await application.bot.get_updates(offset=-1, timeout=1)
-            break  # Got a clean response — we own the session now
+            break
         except Conflict:
             wait = min(3 * (attempt + 1), 15)
-            logger.warning(f"409 Conflict on startup — another instance is still running. Waiting {wait}s… (attempt {attempt + 1}/20)")
+            logger.warning(f"409 Conflict on startup — waiting {wait}s… (attempt {attempt + 1}/20)")
             await asyncio.sleep(wait)
         except Exception:
             break
@@ -671,7 +668,6 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     app.add_error_handler(error_handler)
 
     app.run_polling(
