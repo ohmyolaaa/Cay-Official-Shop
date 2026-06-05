@@ -660,41 +660,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         cat = await db.get_category(cat_id)
         products = await db.get_products(cat_id)
         cat_emoji = cat["emoji"] if cat else "📦"
-        cat_name = cat["name"] if cat else "Category"
+        cat_name  = cat["name"]  if cat else "Category"
         if not products:
             await query.answer()
             await query.message.edit_text(
                 f"{cat_emoji} <b>{cat_name}</b>\n\n🚫 No products available in this category yet.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Back", callback_data="back_to_products")]
+                    [InlineKeyboardButton("⬅️ Services", callback_data="back_to_products")]
                 ]),
             )
             return
-        lines = [
-            f"{cat_emoji} <b>{cat_name}</b>",
-            "─" * 22,
-            "📦 <b>Available Products:</b>",
-            "Tap on any product for more details\n",
+        product_buttons = [
+            [InlineKeyboardButton(f"{cat_emoji} {p['name']}", callback_data=f"user_prod_{p['id']}")]
+            for p in products
         ]
-        product_buttons = []
-        for i, p in enumerate(products):
-            num = NUM_EMOJIS[i] if i < len(NUM_EMOJIS) else f"{i + 1}."
-            warranty = p.get("warranty") or "No warranty"
-            duration = p.get("duration") or ""
-            duration_line = f"⚡ {duration}\n" if duration else ""
-            lines.append(
-                f"{num} {cat_emoji} <b>{p['name']}</b>\n"
-                f"{duration_line}"
-                f"🔺 {warranty}\n"
-            )
-            product_buttons.append([
-                InlineKeyboardButton(f"💠 {p['name']}", callback_data=f"user_prod_{p['id']}")
-            ])
         product_buttons.append([InlineKeyboardButton("⬅️ Services", callback_data="back_to_products")])
         await query.answer()
         await query.message.edit_text(
-            "\n".join(lines),
+            f"{cat_emoji} Choose your <b>{cat_name}</b> plan:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(product_buttons),
         )
@@ -707,27 +691,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not prod:
             await query.answer("Product not found.", show_alert=True)
             return
+        cat = await db.get_category(prod["category_id"])
+        cat_emoji = cat["emoji"] if cat else "📦"
         price    = prod["price"]
         duration = prod.get("duration") or "—"
         warranty = prod.get("warranty") or "No warranty"
         delivery = prod.get("delivery") or "LINK"
-        desc     = prod.get("description") or ""
+        desc     = (prod.get("description") or "").strip()
         text = (
             f"📦 <b>{prod['name']}</b>\n\n"
-            f"💲 {price:.2f} USD\n"
+            f"💰 {price:.2f} USD\n"
             f"⏳ Duration: {duration}\n"
             f"🛡 Warranty: {warranty}\n"
-            f"📬 Delivery: {delivery}\n"
+            f"📦 Delivery: {delivery}\n"
         )
         if desc:
-            text += f"\n✏️ {desc}\n"
+            text += f"\n{desc}\n"
         await query.answer()
         await query.message.edit_text(
             text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🛒 Buy", callback_data=f"buy_{prod_id}")],
-                [InlineKeyboardButton("⬅️ Back to plans", callback_data=f"cat_{prod['category_id']}")],
+                [InlineKeyboardButton(f"{cat_emoji} Buy", callback_data=f"buy_{prod_id}")],
+                [InlineKeyboardButton("Back to plans", callback_data=f"cat_{prod['category_id']}")],
             ]),
         )
         return
