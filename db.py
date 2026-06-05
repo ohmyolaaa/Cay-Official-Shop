@@ -6,6 +6,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 _client: Client | None = None
 
+CATEGORIES_TABLE = "cay_shop_categories"
+PRODUCTS_TABLE = "cay_shop_products"
+
 
 def get_client() -> Client:
     global _client
@@ -20,27 +23,27 @@ def get_client() -> Client:
 
 async def get_categories() -> list[dict]:
     c = get_client()
-    r = c.table("categories").select("*").order("position").order("id").execute()
+    r = c.table(CATEGORIES_TABLE).select("*").order("position").order("id").execute()
     return r.data or []
 
 
 async def get_category(cat_id: int) -> dict | None:
     c = get_client()
-    r = c.table("categories").select("*").eq("id", cat_id).limit(1).execute()
+    r = c.table(CATEGORIES_TABLE).select("*").eq("id", cat_id).limit(1).execute()
     return r.data[0] if r.data else None
 
 
 async def add_category(name: str, emoji: str = "📦") -> int:
     c = get_client()
-    r = c.table("categories").select("position").order("position", desc=True).limit(1).execute()
+    r = c.table(CATEGORIES_TABLE).select("position").order("position", desc=True).limit(1).execute()
     pos = (r.data[0]["position"] + 1) if r.data else 1
-    ins = c.table("categories").insert({"name": name, "emoji": emoji, "position": pos}).execute()
+    ins = c.table(CATEGORIES_TABLE).insert({"name": name, "emoji": emoji, "position": pos}).execute()
     return ins.data[0]["id"]
 
 
 async def delete_category(cat_id: int):
     c = get_client()
-    c.table("categories").delete().eq("id", cat_id).execute()
+    c.table(CATEGORIES_TABLE).delete().eq("id", cat_id).execute()
 
 
 # ─── PRODUCTS ────────────────────────────────────────────────────────────────
@@ -48,7 +51,7 @@ async def delete_category(cat_id: int):
 async def get_products(category_id: int) -> list[dict]:
     c = get_client()
     r = (
-        c.table("products")
+        c.table(PRODUCTS_TABLE)
         .select("*")
         .eq("category_id", category_id)
         .order("position")
@@ -60,14 +63,14 @@ async def get_products(category_id: int) -> list[dict]:
 
 async def get_product(product_id: int) -> dict | None:
     c = get_client()
-    r = c.table("products").select("*").eq("id", product_id).limit(1).execute()
+    r = c.table(PRODUCTS_TABLE).select("*").eq("id", product_id).limit(1).execute()
     return r.data[0] if r.data else None
 
 
 async def add_product(category_id: int, name: str, description: str, price: float, stock: int) -> int:
     c = get_client()
     r = (
-        c.table("products")
+        c.table(PRODUCTS_TABLE)
         .select("position")
         .eq("category_id", category_id)
         .order("position", desc=True)
@@ -75,7 +78,7 @@ async def add_product(category_id: int, name: str, description: str, price: floa
         .execute()
     )
     pos = (r.data[0]["position"] + 1) if r.data else 1
-    ins = c.table("products").insert({
+    ins = c.table(PRODUCTS_TABLE).insert({
         "category_id": category_id,
         "name": name,
         "description": description,
@@ -88,12 +91,12 @@ async def add_product(category_id: int, name: str, description: str, price: floa
 
 async def update_product_stock(product_id: int, stock: int):
     c = get_client()
-    c.table("products").update({"stock": stock}).eq("id", product_id).execute()
+    c.table(PRODUCTS_TABLE).update({"stock": stock}).eq("id", product_id).execute()
 
 
 async def delete_product(product_id: int):
     c = get_client()
-    c.table("products").delete().eq("id", product_id).execute()
+    c.table(PRODUCTS_TABLE).delete().eq("id", product_id).execute()
 
 
 # ─── AVAILABILITY TEXT ────────────────────────────────────────────────────────
