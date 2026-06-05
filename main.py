@@ -293,7 +293,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if text == "🛒 Products":
         kb = await build_products_keyboard()
-        await update.message.reply_text("Choose a service:", reply_markup=kb)
+        await update.message.reply_text("<b>Choose a service:</b>", reply_markup=kb)
 
     elif text == "👤 Profile":
         db_user = await db.get_user(update.effective_user.id)
