@@ -328,7 +328,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if text == "🛒 Products":
         kb = await build_products_keyboard()
-        await update.message.reply_text("<b>Choose a service:</b>", reply_markup=kb)
+        await update.message.reply_text("<b>Choose a service:</b>", parse_mode="HTML", reply_markup=kb)
 
     elif text == "👤 Profile":
         db_user = await db.get_user(update.effective_user.id)
@@ -734,7 +734,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "back_to_products":
         kb = await build_products_keyboard()
         await query.answer()
-        await query.message.edit_text("<b>Choose a service:</b>", reply_markup=kb)
+        await query.message.edit_text("<b>Choose a service:</b>", parse_mode="HTML", reply_markup=kb)
         return
 
     NUM_EMOJIS = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
