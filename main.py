@@ -17,6 +17,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
     ContextTypes,
+    PicklePersistence,
 )
 from telegram.error import Conflict, NetworkError
 import db
@@ -390,22 +391,37 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
     elif awaiting == "prod_name":
         context.user_data["new_prod_name"] = text
         context.user_data["awaiting"] = "prod_desc"
-        await update.message.reply_text("Enter a <b>description</b> for this product:", parse_mode="HTML")
+        await update.message.reply_text(
+            "Enter a <b>description</b> for this product:",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
 
     elif awaiting == "prod_desc":
         context.user_data["new_prod_desc"] = text
         context.user_data["awaiting"] = "prod_price"
-        await update.message.reply_text("Enter the <b>price</b> (e.g. 4.99):", parse_mode="HTML")
+        await update.message.reply_text(
+            "Enter the <b>price</b> (e.g. 4.99):",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
 
     elif awaiting == "prod_price":
         try:
             price = float(text)
         except ValueError:
-            await update.message.reply_text("❌ Invalid price. Please enter a number like 4.99:")
+            await update.message.reply_text(
+                "❌ Invalid price. Please enter a number like 4.99:",
+                reply_markup=ReplyKeyboardRemove(),
+            )
             return
         context.user_data["new_prod_price"] = price
         context.user_data["awaiting"] = "prod_stock"
-        await update.message.reply_text("Enter the <b>stock quantity</b> (e.g. 10):", parse_mode="HTML")
+        await update.message.reply_text(
+            "Enter the <b>stock quantity</b> (e.g. 10):",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
 
     elif awaiting == "prod_stock":
         try:
@@ -820,9 +836,11 @@ def main() -> None:
     if not token:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set.")
 
+    persistence = PicklePersistence(filepath="bot_data.pkl")
     app = (
         Application.builder()
         .token(token)
+        .persistence(persistence)
         .post_init(post_init)
         .build()
     )
