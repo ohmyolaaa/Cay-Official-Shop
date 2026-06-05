@@ -110,7 +110,7 @@ async def get_all_products_availability() -> str:
     categories = await get_categories()
     if not categories:
         return "🗒 <b>What's Available</b>\n\nNo products added yet."
-    lines = ["🗒 <b>What's Available</b>\n"]
+    lines = ["🗒 <b>What's Available</b>\n━━━━━━━━━━━━━━━━━━━━━━━━"]
     for cat in categories:
         products = await get_products(cat["id"])
         if not products:
@@ -125,6 +125,7 @@ async def get_all_products_availability() -> str:
             )
     if len(lines) == 1:
         lines.append("\nNo products added yet.")
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 
