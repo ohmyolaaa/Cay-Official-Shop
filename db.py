@@ -96,6 +96,10 @@ async def update_product_stock(prod_id: int, stock: int) -> None:
     c = _client()
     c.table(PRODUCTS_TABLE).update({"stock": stock}).eq("id", prod_id).execute()
 
+async def update_product(prod_id: int, **fields) -> None:
+    c = _client()
+    if fields:
+        c.table(PRODUCTS_TABLE).update(fields).eq("id", prod_id).execute()
 
 async def delete_product(prod_id: int) -> None:
     c = _client()

@@ -212,7 +212,6 @@ async def admin_products_pick_cat_keyboard() -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_main")])
     return InlineKeyboardMarkup(rows)
 
-
 async def admin_products_keyboard(cat_id: int):
     products = await db.get_products(cat_id)
     cat = await db.get_category(cat_id)
@@ -225,15 +224,47 @@ async def admin_products_keyboard(cat_id: int):
                 callback_data=f"admin_prod_{p['id']}"
             ),
         ])
-        rows.append([
-            InlineKeyboardButton("✏️ Stock", callback_data=f"admin_stock_{p['id']}"),
-            InlineKeyboardButton("🗑 Delete", callback_data=f"admin_delprod_{p['id']}"),
-        ])
     rows.append([InlineKeyboardButton("➕ Add Product", callback_data=f"admin_addprod_{cat_id}")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_products")])
     cat_name = f"{cat['emoji']} {cat['name']}" if cat else "Category"
     return InlineKeyboardMarkup(rows), cat_name
 
+def build_admin_prod_detail_text(prod: dict) -> str:
+    stock_icon = "✅" if prod["stock"] > 0 else "❌"
+    demo = prod.get("demo_url") or "—"
+    desc = (prod.get("description") or "—").strip()
+    return (
+        f"📦 <b>#{prod['id']} {prod['name']}</b>\n\n"
+        f"💲 <b>Price:</b> ${prod['price']:.2f}\n"
+        f"📦 <b>Stock:</b> {stock_icon} {prod['stock']}x\n"
+        f"⏳ <b>Duration:</b> {prod.get('duration') or '—'}\n"
+        f"🛡 <b>Warranty:</b> {prod.get('warranty') or 'No warranty'}\n"
+        f"📬 <b>Delivery:</b> {prod.get('delivery') or 'LINK'}\n"
+        f"🎮 <b>Demo URL:</b> {demo}\n\n"
+        f"📝 <b>Description:</b>\n{desc}"
+    )
+
+def admin_prod_edit_keyboard(prod_id: int, cat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Name",        callback_data=f"admin_editprod_name_{prod_id}"),
+            InlineKeyboardButton("💲 Price",        callback_data=f"admin_editprod_price_{prod_id}"),
+        ],
+        [
+            InlineKeyboardButton("📝 Description",  callback_data=f"admin_editprod_desc_{prod_id}"),
+            InlineKeyboardButton("📦 Stock",        callback_data=f"admin_editprod_stock_{prod_id}"),
+        ],
+        [
+            InlineKeyboardButton("⏳ Duration",     callback_data=f"admin_editprod_duration_{prod_id}"),
+            InlineKeyboardButton("🛡 Warranty",     callback_data=f"admin_editprod_warranty_{prod_id}"),
+        ],
+        [
+            InlineKeyboardButton("📬 Delivery",     callback_data=f"admin_editprod_delivery_{prod_id}"),
+            InlineKeyboardButton("🎮 Demo URL",     callback_data=f"admin_editprod_demo_{prod_id}"),
+        ],
+        [InlineKeyboardButton("🗑 Delete Product",  callback_data=f"admin_delprod_{prod_id}")],
+        [InlineKeyboardButton("⬅️ Back",            callback_data=f"admin_prodcat_{cat_id}")],
+    ])
 
 # ─── USER COMMAND HANDLERS ───────────────────────────────────────────────────
 
@@ -499,6 +530,48 @@ async def _process_admin_input(update: Update, user_id: int, ud: dict) -> None:
             f"💲 ${price:.2f} | 📦 {stock}x in stock | 📬 {delivery}",
             parse_mode="HTML",
             reply_markup=MAIN_MENU,
+        )
+
+    elif awaiting in ("prod_edit_name", "prod_edit_price", "prod_edit_desc",
+                      "prod_edit_stock", "prod_edit_duration", "prod_edit_warranty",
+                      "prod_edit_delivery", "prod_edit_demo"):
+        prod_id = ud.pop("edit_prod_id", None)
+        ud.pop("awaiting", None)
+        await db.set_session(user_id, ud)
+        if not prod_id:
+            await update.message.reply_text("❌ Session expired. Please open the product again.")
+            return
+        val = text.strip()
+        field_db_map = {
+            "prod_edit_name":     ("name",        lambda v: v),
+            "prod_edit_price":    ("price",       float),
+            "prod_edit_desc":     ("description", lambda v: v),
+            "prod_edit_stock":    ("stock",       int),
+            "prod_edit_duration": ("duration",    lambda v: "" if v == "-" else v),
+            "prod_edit_warranty": ("warranty",    lambda v: v),
+            "prod_edit_delivery": ("delivery",    lambda v: v),
+            "prod_edit_demo":     ("demo_url",    lambda v: "" if v == "-" else v),
+        }
+        db_field, converter = field_db_map[awaiting]
+        try:
+            converted = converter(val)
+        except (ValueError, TypeError):
+            await update.message.reply_text(f"❌ Invalid value. Please try again.")
+            return
+        try:
+            await db.update_product(prod_id, **{db_field: converted})
+        except Exception as e:
+            logger.error(f"Failed to update product field {db_field}: {e}", exc_info=e)
+            await update.message.reply_text("❌ Failed to save. Please try again.")
+            return
+        prod = await db.get_product(prod_id)
+        await update.message.reply_text(
+            f"✅ Updated! Here's the product:\n\n{build_admin_prod_detail_text(prod)}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Edit more", callback_data=f"admin_prod_{prod_id}")],
+                [InlineKeyboardButton("⬅️ Back to list", callback_data=f"admin_prodcat_{prod['category_id']}")],
+            ]),
         )
 
     elif awaiting == "stock":
@@ -786,6 +859,55 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    # ── Product detail page ──
+    if data.startswith("admin_prod_"):
+        prod_id = int(data.split("_")[2])
+        prod = await db.get_product(prod_id)
+        if not prod:
+            await query.answer("Product not found.", show_alert=True)
+            return
+        await query.answer()
+        await query.message.edit_text(
+            build_admin_prod_detail_text(prod),
+            parse_mode="HTML",
+            reply_markup=admin_prod_edit_keyboard(prod_id, prod["category_id"]),
+        )
+        return
+
+    # ── Edit individual product field ──
+    if data.startswith("admin_editprod_"):
+        parts = data.split("_")        # ["admin", "editprod", field, prod_id]
+        field = parts[2]
+        prod_id = int(parts[3])
+        prod = await db.get_product(prod_id)
+        if not prod:
+            await query.answer("Product not found.", show_alert=True)
+            return
+        field_map = {
+            "name":     ("prod_edit_name",     "✏️ Enter a new <b>name</b>:"),
+            "price":    ("prod_edit_price",    "💲 Enter a new <b>price</b> (e.g. <code>9.99</code>):"),
+            "desc":     ("prod_edit_desc",     "📝 Enter a new <b>description</b>:"),
+            "stock":    ("prod_edit_stock",    "📦 Enter new <b>stock quantity</b>:"),
+            "duration": ("prod_edit_duration", "⏳ Enter a new <b>duration</b> (e.g. <code>30 days</code>). Send <code>-</code> to clear:"),
+            "warranty": ("prod_edit_warranty", "🛡 Enter a new <b>warranty</b>:"),
+            "delivery": ("prod_edit_delivery", "📬 Enter a new <b>delivery type</b> (e.g. <code>LINK</code>, <code>ACCOUNT</code>):"),
+            "demo":     ("prod_edit_demo",     "🎮 Enter a new <b>demo URL</b>. Send <code>-</code> to clear:"),
+        }
+        if field not in field_map:
+            await query.answer()
+            return
+        awaiting_key, prompt = field_map[field]
+        db_field = {"desc": "description", "demo": "demo_url"}.get(field, field)
+        current_val = str(prod.get(db_field) or "—")
+        await db.set_session(user_id, {"awaiting": awaiting_key, "edit_prod_id": prod_id})
+        await query.answer()
+        await query.message.reply_text(
+            f"{prompt}\n\n<i>Current: {current_val}</i>",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
     if data == "admin_products":
         cats = await db.get_categories()
         if not cats:
@@ -880,25 +1002,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         else:
             await query.answer("Product not found.", show_alert=True)
-        return
-
-    if data.startswith("admin_stock_"):
-        prod_id = int(data.split("_")[2])
-        prod = await db.get_product(prod_id)
-        if not prod:
-            await query.answer("Product not found.", show_alert=True)
-            return
-        await db.set_session(user_id, {
-            "awaiting": "stock",
-            "stock_prod_id": prod_id,
-            "stock_cat_id": prod["category_id"],
-        })
-        await query.answer()
-        await query.message.reply_text(
-            f"✏️ Enter new stock quantity for <b>{prod['name']}</b>:",
-            parse_mode="HTML",
-            reply_markup=ReplyKeyboardRemove(),
-        )
         return
 
     if data == "admin_addcat":
