@@ -2,7 +2,7 @@ import os
 from supabase import create_client, Client
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
 CATEGORIES_TABLE = "cay_shop_categories"
 PRODUCTS_TABLE = "cay_shop_products"
@@ -38,6 +38,17 @@ async def add_category(name: str, emoji: str) -> int:
 async def delete_category(cat_id: int) -> None:
     c = _client()
     c.table(CATEGORIES_TABLE).delete().eq("id", cat_id).execute()
+
+
+async def update_category(cat_id: int, name: str | None = None, emoji: str | None = None) -> None:
+    c = _client()
+    updates = {}
+    if name is not None:
+        updates["name"] = name
+    if emoji is not None:
+        updates["emoji"] = emoji
+    if updates:
+        c.table(CATEGORIES_TABLE).update(updates).eq("id", cat_id).execute()
 
 
 # ─── PRODUCTS ────────────────────────────────────────────────────────────────

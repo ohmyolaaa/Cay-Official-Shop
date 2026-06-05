@@ -191,6 +191,14 @@ async def admin_categories_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def admin_cat_edit_keyboard(cat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Edit Name", callback_data=f"admin_editcat_name_{cat_id}")],
+        [InlineKeyboardButton("🎨 Change Emoji", callback_data=f"admin_editcat_emoji_{cat_id}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="admin_categories")],
+    ])
+
+
 async def admin_products_pick_cat_keyboard() -> InlineKeyboardMarkup:
     cats = await db.get_categories()
     rows = []
@@ -358,6 +366,25 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=build_emoji_picker(),
         )
 
+    elif awaiting == "edit_cat_name":
+        cat_id = context.user_data.pop("edit_cat_id", None)
+        context.user_data.pop("awaiting", None)
+        if not cat_id:
+            await update.message.reply_text("❌ Session expired. Please open the category again.")
+            return
+        try:
+            await db.update_category(cat_id, name=text)
+        except Exception as e:
+            logger.error(f"Failed to update category name: {e}", exc_info=e)
+            await update.message.reply_text("❌ Failed to update name. Please try again.")
+            return
+        cat = await db.get_category(cat_id)
+        label = f"{cat['emoji']} {cat['name']}" if cat else text
+        await update.message.reply_text(
+            f"✅ Category renamed to <b>{label}</b>!",
+            parse_mode="HTML",
+        )
+
     elif awaiting == "prod_name":
         context.user_data["new_prod_name"] = text
         context.user_data["awaiting"] = "prod_desc"
@@ -444,7 +471,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.delete()
         return
 
-    # ── Emoji picker (category creation) ──
+    # ── Emoji picker (category creation OR emoji edit) ──
     # Emojis are stored by index to avoid multi-byte callback_data issues.
     if data.startswith("emoji_"):
         if not is_admin(user_id):
@@ -457,12 +484,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Invalid emoji selection.", show_alert=True)
             return
 
+        # ── Edit mode: changing emoji on an existing category ──
+        edit_cat_id = context.user_data.get("edit_cat_id")
+        if edit_cat_id:
+            try:
+                await db.update_category(edit_cat_id, emoji=emoji)
+            except Exception as e:
+                logger.error(f"Failed to update category emoji: {e}", exc_info=e)
+                await query.answer("❌ Failed to update emoji. Please try again.", show_alert=True)
+                return
+            context.user_data.pop("edit_cat_id", None)
+            context.user_data.pop("awaiting", None)
+            cat = await db.get_category(edit_cat_id)
+            label = f"{cat['emoji']} {cat['name']}" if cat else f"{emoji} category"
+            kb = await admin_categories_keyboard()
+            await query.answer(f"✅ Emoji updated!")
+            await query.message.edit_text(
+                f"✅ Emoji updated — <b>{label}</b>\n\n📂 <b>Categories</b>:",
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+            return
+
+        # ── Create mode: picking emoji for a new category ──
         # Use get() first — only pop() after the DB call succeeds so retries
         # still have the name available if something goes wrong.
         name = context.user_data.get("new_cat_name")
 
         if not name:
-            # Session expired (e.g. bot was restarted). Give clear feedback.
             await query.answer("Session expired — please start /admin again.", show_alert=True)
             await query.message.delete()
             return
@@ -615,6 +664,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"📦 <b>Products — {cat_name}</b>\n\nManage products below:",
             parse_mode="HTML",
             reply_markup=kb,
+        )
+        return
+
+    if data.startswith("admin_cat_") and not data.startswith("admin_categories"):
+        cat_id = int(data.split("_")[2])
+        cat = await db.get_category(cat_id)
+        if not cat:
+            await query.answer("Category not found.", show_alert=True)
+            return
+        await query.answer()
+        await query.message.edit_text(
+            f"✏️ <b>Edit Category</b>\n\n"
+            f"Current: <b>{cat['emoji']} {cat['name']}</b>\n\n"
+            f"What would you like to change?",
+            parse_mode="HTML",
+            reply_markup=admin_cat_edit_keyboard(cat_id),
+        )
+        return
+
+    if data.startswith("admin_editcat_name_"):
+        cat_id = int(data.split("_")[3])
+        cat = await db.get_category(cat_id)
+        context.user_data["awaiting"] = "edit_cat_name"
+        context.user_data["edit_cat_id"] = cat_id
+        await query.answer()
+        await query.message.reply_text(
+            f"✏️ Enter a new name for <b>{cat['emoji']} {cat['name']}</b>:",
+            parse_mode="HTML",
+        )
+        return
+
+    if data.startswith("admin_editcat_emoji_"):
+        cat_id = int(data.split("_")[3])
+        cat = await db.get_category(cat_id)
+        context.user_data["edit_cat_id"] = cat_id
+        context.user_data.pop("new_cat_name", None)
+        context.user_data.pop("awaiting", None)
+        await query.answer()
+        await query.message.reply_text(
+            f"🎨 Pick a new emoji for <b>{cat['emoji']} {cat['name']}</b>:",
+            parse_mode="HTML",
+            reply_markup=build_emoji_picker(),
         )
         return
 
