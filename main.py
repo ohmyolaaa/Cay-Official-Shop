@@ -5,6 +5,7 @@ from datetime import datetime
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -293,7 +294,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if text == "🛒 Products":
         kb = await build_products_keyboard()
-        await update.message.reply_text("<b>Choose a service:</b>", reply_markup=kb)
+        await update.message.reply_text("Choose a service:", reply_markup=kb)
 
     elif text == "👤 Profile":
         db_user = await db.get_user(update.effective_user.id)
@@ -383,6 +384,7 @@ async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(
             f"✅ Category renamed to <b>{label}</b>!",
             parse_mode="HTML",
+            reply_markup=MAIN_MENU,
         )
 
     elif awaiting == "prod_name":
@@ -469,6 +471,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data.clear()
         await query.answer("Cancelled.")
         await query.message.delete()
+        await query.message.reply_text("❌ Cancelled.", reply_markup=MAIN_MENU)
         return
 
     # ── Emoji picker (category creation OR emoji edit) ──
@@ -692,6 +695,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.reply_text(
             f"✏️ Enter a new name for <b>{cat['emoji']} {cat['name']}</b>:",
             parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return
 
@@ -753,13 +757,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.reply_text(
             f"✏️ Enter new stock quantity for <b>{prod['name']}</b>:",
             parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return
 
     if data == "admin_addcat":
         context.user_data["awaiting"] = "cat_name"
         await query.answer()
-        await query.message.reply_text("📂 Enter the <b>category name</b>:", parse_mode="HTML")
+        await query.message.reply_text(
+            "📂 Enter the <b>category name</b>:",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
     if data.startswith("admin_addprod_"):
@@ -767,7 +776,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["awaiting"] = "prod_name"
         context.user_data["new_prod_cat_id"] = cat_id
         await query.answer()
-        await query.message.reply_text("📦 Enter the <b>product name</b>:", parse_mode="HTML")
+        await query.message.reply_text(
+            "📦 Enter the <b>product name</b>:",
+            parse_mode="HTML",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
     # Unhandled callback
