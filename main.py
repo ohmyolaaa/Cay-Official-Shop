@@ -15,10 +15,10 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     filters,
     ContextTypes,
 )
+from telegram.error import Conflict, NetworkError
 import db
 
 logging.basicConfig(
@@ -32,13 +32,6 @@ ADMIN_IDS = [
     for x in os.environ.get("ADMIN_IDS", "").split(",")
     if x.strip().isdigit()
 ]
-
-# Conversation states
-(
-    ASK_CAT_NAME, ASK_CAT_EMOJI,
-    ASK_PROD_NAME, ASK_PROD_DESC, ASK_PROD_PRICE, ASK_PROD_STOCK,
-    ASK_STOCK_UPDATE,
-) = range(7)
 
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
@@ -78,6 +71,16 @@ HELP_TEXT = (
     "<b>Customer Support:</b> @caydigitals\n\n"
     "⏳ You will receive a response once your request has been reviewed"
 )
+
+MENU_BUTTONS = {
+    "🛒 Products",
+    "👤 Profile",
+    "🎁 Invite Center",
+    "💰 Top up balance",
+    "🎫 Redeem Code",
+    "📋 Bot Policy",
+    "❓ Help",
+}
 
 
 def is_admin(user_id: int) -> bool:
@@ -171,7 +174,7 @@ async def admin_products_pick_cat_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-async def admin_products_keyboard(cat_id: int) -> InlineKeyboardMarkup:
+async def admin_products_keyboard(cat_id: int):
     products = await db.get_products(cat_id)
     cat = await db.get_category(cat_id)
     rows = []
@@ -212,7 +215,7 @@ async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🇸🇦 Arabic عربي", callback_data="lang_ar"),
-                InlineKeyboardButton("🇺🇸 English 🇺🇸 English", callback_data="lang_en"),
+                InlineKeyboardButton("🇺🇸 English", callback_data="lang_en"),
             ]
         ]),
     )
@@ -239,11 +242,22 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-# ─── USER MESSAGE HANDLER ────────────────────────────────────────────────────
+# ─── COMBINED MESSAGE HANDLER ─────────────────────────────────────────────────
+# Single handler for ALL text messages. For admins with an active flow,
+# it processes the admin input first; otherwise it handles menu buttons.
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
+    user_id = update.effective_user.id
 
+    # ── Admin input flow (only when awaiting a response) ──
+    if is_admin(user_id) and context.user_data.get("awaiting"):
+        # Only intercept if the text is NOT a menu button press
+        if text not in MENU_BUTTONS:
+            await _process_admin_input(update, context)
+            return
+
+    # ── Menu buttons ──
     if text == "🛒 Products":
         kb = await build_products_keyboard()
         await update.message.reply_text("Choose a service:", reply_markup=kb)
@@ -299,6 +313,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text(
             "Please choose an option from the menu below:",
+            reply_markup=MAIN_MENU,
+        )
+
+
+# ─── ADMIN TEXT INPUT LOGIC ──────────────────────────────────────────────────
+
+async def _process_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    awaiting = context.user_data.get("awaiting")
+    text = update.message.text.strip()
+
+    # ── Category flow ──
+    if awaiting == "cat_name":
+        context.user_data["new_cat_name"] = text
+        context.user_data["awaiting"] = "cat_emoji"
+        await update.message.reply_text("Now send an <b>emoji</b> for this category (e.g. 🌟):", parse_mode="HTML")
+
+    elif awaiting == "cat_emoji":
+        name = context.user_data.pop("new_cat_name")
+        emoji = text
+        context.user_data.pop("awaiting", None)
+        await db.add_category(name, emoji)
+        await update.message.reply_text(
+            f"✅ Category <b>{emoji} {name}</b> added!\n\nUse /admin to manage products.",
+            parse_mode="HTML",
+            reply_markup=MAIN_MENU,
+        )
+
+    # ── Product flow ──
+    elif awaiting == "prod_name":
+        context.user_data["new_prod_name"] = text
+        context.user_data["awaiting"] = "prod_desc"
+        await update.message.reply_text("Enter a <b>description</b> for this product:", parse_mode="HTML")
+
+    elif awaiting == "prod_desc":
+        context.user_data["new_prod_desc"] = text
+        context.user_data["awaiting"] = "prod_price"
+        await update.message.reply_text("Enter the <b>price</b> (e.g. 4.99):", parse_mode="HTML")
+
+    elif awaiting == "prod_price":
+        try:
+            price = float(text)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid price. Please enter a number like 4.99:")
+            return
+        context.user_data["new_prod_price"] = price
+        context.user_data["awaiting"] = "prod_stock"
+        await update.message.reply_text("Enter the <b>stock quantity</b> (e.g. 10):", parse_mode="HTML")
+
+    elif awaiting == "prod_stock":
+        try:
+            stock = int(text)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
+            return
+        cat_id = context.user_data.pop("new_prod_cat_id")
+        name = context.user_data.pop("new_prod_name")
+        desc = context.user_data.pop("new_prod_desc")
+        price = context.user_data.pop("new_prod_price")
+        context.user_data.pop("awaiting", None)
+        await db.add_product(cat_id, name, desc, price, stock)
+        cat = await db.get_category(cat_id)
+        cat_name = f"{cat['emoji']} {cat['name']}" if cat else "category"
+        await update.message.reply_text(
+            f"✅ Product <b>{name}</b> added to <b>{cat_name}</b>!\n"
+            f"💵 ${price:.2f} | 📦 {stock}x in stock",
+            parse_mode="HTML",
+            reply_markup=MAIN_MENU,
+        )
+
+    # ── Stock update flow ──
+    elif awaiting == "stock":
+        try:
+            stock = int(text)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
+            return
+        prod_id = context.user_data.pop("stock_prod_id")
+        context.user_data.pop("stock_cat_id", None)
+        context.user_data.pop("awaiting", None)
+        prod = await db.get_product(prod_id)
+        await db.update_product_stock(prod_id, stock)
+        await update.message.reply_text(
+            f"✅ Stock for <b>{prod['name']}</b> updated to <b>{stock}x</b>.",
+            parse_mode="HTML",
             reply_markup=MAIN_MENU,
         )
 
@@ -440,7 +538,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await db.delete_category(cat_id)
         kb = await admin_categories_keyboard()
         await query.message.edit_text(
-            f"✅ Category deleted.\n\n📂 <b>Categories</b>:",
+            "✅ Category deleted.\n\n📂 <b>Categories</b>:",
             parse_mode="HTML",
             reply_markup=kb,
         )
@@ -460,7 +558,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
-    # stock update trigger — store prod id and ask for new value
     if data.startswith("admin_stock_"):
         prod_id = int(data.split("_")[2])
         prod = await db.get_product(prod_id)
@@ -473,13 +570,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # add category trigger
     if data == "admin_addcat":
         context.user_data["awaiting"] = "cat_name"
         await query.message.reply_text("📂 Enter the <b>category name</b>:", parse_mode="HTML")
         return
 
-    # add product trigger
     if data.startswith("admin_addprod_"):
         cat_id = int(data.split("_")[2])
         context.user_data["awaiting"] = "prod_name"
@@ -488,104 +583,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
 
-# ─── ADMIN TEXT INPUT HANDLER ────────────────────────────────────────────────
+# ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 
-async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_admin(update.effective_user.id):
-        return
-    awaiting = context.user_data.get("awaiting")
-    if not awaiting:
-        return
-
-    text = update.message.text.strip()
-
-    # ── Category flow ──
-    if awaiting == "cat_name":
-        context.user_data["new_cat_name"] = text
-        context.user_data["awaiting"] = "cat_emoji"
-        await update.message.reply_text("Now send an <b>emoji</b> for this category (e.g. 🌟):", parse_mode="HTML")
-
-    elif awaiting == "cat_emoji":
-        name = context.user_data.pop("new_cat_name")
-        emoji = text
-        context.user_data.pop("awaiting", None)
-        await db.add_category(name, emoji)
-        await update.message.reply_text(
-            f"✅ Category <b>{emoji} {name}</b> added!\n\nUse /admin to manage products.",
-            parse_mode="HTML",
-            reply_markup=MAIN_MENU,
-        )
-
-    # ── Product flow ──
-    elif awaiting == "prod_name":
-        context.user_data["new_prod_name"] = text
-        context.user_data["awaiting"] = "prod_desc"
-        await update.message.reply_text("Enter a <b>description</b> for this product:", parse_mode="HTML")
-
-    elif awaiting == "prod_desc":
-        context.user_data["new_prod_desc"] = text
-        context.user_data["awaiting"] = "prod_price"
-        await update.message.reply_text("Enter the <b>price</b> (e.g. 4.99):", parse_mode="HTML")
-
-    elif awaiting == "prod_price":
-        try:
-            price = float(text)
-        except ValueError:
-            await update.message.reply_text("❌ Invalid price. Please enter a number like 4.99:")
-            return
-        context.user_data["new_prod_price"] = price
-        context.user_data["awaiting"] = "prod_stock"
-        await update.message.reply_text("Enter the <b>stock quantity</b> (e.g. 10):", parse_mode="HTML")
-
-    elif awaiting == "prod_stock":
-        try:
-            stock = int(text)
-        except ValueError:
-            await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
-            return
-        cat_id = context.user_data.pop("new_prod_cat_id")
-        name = context.user_data.pop("new_prod_name")
-        desc = context.user_data.pop("new_prod_desc")
-        price = context.user_data.pop("new_prod_price")
-        context.user_data.pop("awaiting", None)
-        await db.add_product(cat_id, name, desc, price, stock)
-        cat = await db.get_category(cat_id)
-        cat_name = f"{cat['emoji']} {cat['name']}" if cat else "category"
-        await update.message.reply_text(
-            f"✅ Product <b>{name}</b> added to <b>{cat_name}</b>!\n"
-            f"💵 ${price:.2f} | 📦 {stock}x in stock",
-            parse_mode="HTML",
-            reply_markup=MAIN_MENU,
-        )
-
-    # ── Stock update flow ──
-    elif awaiting == "stock":
-        try:
-            stock = int(text)
-        except ValueError:
-            await update.message.reply_text("❌ Invalid quantity. Enter a whole number:")
-            return
-        prod_id = context.user_data.pop("stock_prod_id")
-        context.user_data.pop("stock_cat_id", None)
-        context.user_data.pop("awaiting", None)
-        prod = await db.get_product(prod_id)
-        await db.update_product_stock(prod_id, stock)
-        await update.message.reply_text(
-            f"✅ Stock for <b>{prod['name']}</b> updated to <b>{stock}x</b>.",
-            parse_mode="HTML",
-            reply_markup=MAIN_MENU,
-        )
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Conflict):
+        logger.warning("Conflict error — another bot instance may still be shutting down. Will retry.")
+    elif isinstance(context.error, NetworkError):
+        logger.warning(f"Network error: {context.error}")
+    else:
+        logger.error(f"Unhandled error: {context.error}", exc_info=context.error)
 
 
 # ─── STARTUP ─────────────────────────────────────────────────────────────────
 
-async def clear_existing_sessions(token: str) -> None:
-    async with Bot(token) as bot:
-        try:
-            await bot.get_updates(offset=-1, timeout=1)
-        except Exception:
-            pass
-    logger.info("Cleared any existing polling sessions")
+async def post_init(application: Application) -> None:
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logger.info(f"Bot started — admins: {ADMIN_IDS}")
 
 
 def main() -> None:
@@ -593,24 +606,21 @@ def main() -> None:
     if not token:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set.")
 
-    asyncio.run(clear_existing_sessions(token))
-
-    app = Application.builder().token(token).build()
+    app = (
+        Application.builder()
+        .token(token)
+        .post_init(post_init)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CommandHandler("contactadmin", contactadmin_command))
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
-
-    # Admin text input must come before the general user message handler
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_IDS),
-        handle_admin_input,
-    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
 
-    logger.info(f"Bot started — admins: {ADMIN_IDS}")
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
