@@ -540,7 +540,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         cat = await db.get_category(cat_id)
         products = await db.get_products(cat_id)
         if not products:
-            await query.answer("No products in this category yet.", show_alert=True)
+            cat_label = f"{cat['emoji']} {cat['name']}" if cat else "This category"
+            await query.answer()
+            await query.message.edit_text(
+                f"{cat_label}\n\n🚫 No products available in this category yet.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data="back_to_products")]
+                ]),
+            )
             return
         lines = [f"{cat['emoji']} <b>{cat['name']}</b>\n"]
         for p in products:
